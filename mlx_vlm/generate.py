@@ -609,6 +609,12 @@ def stream_generate(
     )
     enable_thinking = kwargs.pop("enable_thinking", False)
 
+    # Gemma 4 uses <|channel>/<channel|> as the generated thinking delimiters,
+    # regardless of what the client sends for thinking_start/end_token.
+    if model.config.model_type == "gemma4":
+        thinking_start_token = "<|channel>"
+        thinking_end_token = "<channel|>"
+
     # Skip special tokens
     skip_special_tokens = kwargs.pop("skip_special_tokens", False)
     skip_special_token_ids = (
@@ -697,8 +703,14 @@ def stream_generate(
             kwargs["prompt_cache"] = kv_cache
 
     if thinking_budget is not None:
+        # Gemma 4 injects <|think|> into the prompt via the chat template, but
+        # generates thinking tokens as <|channel>. Use <|think|> as the gate to
+        # detect whether thinking is active in this prompt.
+        gate_token = (
+            "<|think|>" if model.config.model_type == "gemma4" else thinking_start_token
+        )
         thinking_start_token_id = tokenizer.encode(
-            thinking_start_token, add_special_tokens=False
+            gate_token, add_special_tokens=False
         )[-1]
         enable_thinking = enable_thinking and (
             thinking_start_token_id in input_ids.flatten().tolist()

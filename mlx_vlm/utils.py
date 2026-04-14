@@ -1478,6 +1478,7 @@ class ThinkingBudgetCriteria:
         self.in_thinking = self.enable_thinking
         self.thinking_token_count = 0
         self.budget_exceeded = False
+        self.forced_token_id = None
 
     def reset_thinking_state(self):
         """Reset thinking state between generations."""
@@ -1485,6 +1486,7 @@ class ThinkingBudgetCriteria:
         self.thinking_token_count = 0
         self.budget_exceeded = False
         self._forced_index = 0
+        self.forced_token_id = None
 
     def __call__(self, token_id: int) -> Optional[int]:
         """Process a token and return a forced token ID if budget exceeded, else None."""

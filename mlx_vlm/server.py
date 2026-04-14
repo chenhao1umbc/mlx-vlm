@@ -298,6 +298,7 @@ class ChatMessage(FlexibleBaseModel):
             ResponseOutputMessageContentList,
         ]
     ] = Field(None, description="Content of the message.")
+    reasoning: Optional[str] = Field(None, description="Thinking/reasoning content.")
     tool_calls: List = []
 
 
@@ -1133,6 +1134,10 @@ async def chat_completions_endpoint(request: ChatRequest):
 
                     output_text = ""
                     request_id = f"chatcmpl-{uuid.uuid4()}"
+                    _THINK_START = "<|channel>"
+                    _THINK_END = "<channel|>"
+                    in_thinking = False
+                    thinking_buffer = ""
                     for chunk in token_iterator:
                         if chunk is None or not hasattr(chunk, "text"):
                             print("Warning: Received unexpected chunk format:", chunk)
@@ -1140,7 +1145,6 @@ async def chat_completions_endpoint(request: ChatRequest):
 
                         output_text += chunk.text
 
-                        # Yield chunks in Server-Sent Events (SSE) format
                         usage_stats = {
                             "input_tokens": chunk.prompt_tokens,
                             "output_tokens": chunk.generation_tokens,
@@ -1151,9 +1155,48 @@ async def chat_completions_endpoint(request: ChatRequest):
                             "peak_memory": chunk.peak_memory,
                         }
 
+                        text = chunk.text
+                        delta_content = None
+                        delta_reasoning = None
+
+                        if _THINK_START not in text and _THINK_END not in text:
+                            # Fast path: no markers in this chunk
+                            if in_thinking:
+                                thinking_buffer += text
+                            else:
+                                delta_content = text
+                        else:
+                            # Slow path: marker found — state transition
+                            if _THINK_START in text and not in_thinking:
+                                before, after = text.split(_THINK_START, 1)
+                                if before:
+                                    delta_content = before
+                                in_thinking = True
+                                thinking_buffer = after
+                            elif in_thinking:
+                                thinking_buffer += text
+
+                            if _THINK_END in thinking_buffer:
+                                think_part, remainder = thinking_buffer.split(
+                                    _THINK_END, 1
+                                )
+                                delta_reasoning = think_part.lstrip("\n")
+                                thinking_buffer = ""
+                                in_thinking = False
+                                if remainder:
+                                    delta_content = remainder
+
+                        # Skip emitting empty chunks during thinking accumulation
+                        if delta_content is None and delta_reasoning is None:
+                            continue
+
                         choices = [
                             ChatStreamChoice(
-                                delta=ChatMessage(role="assistant", content=chunk.text)
+                                delta=ChatMessage(
+                                    role="assistant",
+                                    content=delta_content,
+                                    reasoning=delta_reasoning,
+                                )
                             )
                         ]
                         chunk_data = ChatStreamChunk(
@@ -1259,12 +1302,25 @@ async def chat_completions_endpoint(request: ChatRequest):
                     tool_calls["calls"] = []
                     tool_calls["remaining_text"] = gen_result.text
 
+                _raw = tool_calls["remaining_text"]
+                _THINK_START = "<|channel>"
+                _THINK_END = "<channel|>"
+                if _THINK_START in _raw and _THINK_END in _raw:
+                    _after = _raw.split(_THINK_START, 1)[1]
+                    _thinking, _response = _after.split(_THINK_END, 1)
+                    _reasoning = _thinking.lstrip("\n") or None
+                    _content = _response.lstrip("\n")
+                else:
+                    _reasoning = None
+                    _content = _raw
+
                 choices = [
                     ChatChoice(
                         finish_reason="stop",
                         message=ChatMessage(
                             role="assistant",
-                            content=tool_calls["remaining_text"],
+                            content=_content,
+                            reasoning=_reasoning,
                             tool_calls=tool_calls["calls"],
                         ),
                     )
