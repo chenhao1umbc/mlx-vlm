@@ -44,6 +44,8 @@ DEFAULT_COMPLETION_BATCH_SIZE = 32
 DEFAULT_PREFILL_BATCH_SIZE = 8
 DEFAULT_THINKING_START_TOKEN = "<think>"
 DEFAULT_THINKING_END_TOKEN = "</think>"
+GEMMA4_THINKING_START_TOKEN = "<|channel>"
+GEMMA4_THINKING_END_TOKEN = "<channel|>"
 DEFAULT_QUANTIZED_KV_START = 5000
 DEFAULT_PREFILL_STEP_SIZE = 2048
 
@@ -609,11 +611,10 @@ def stream_generate(
     )
     enable_thinking = kwargs.pop("enable_thinking", False)
 
-    # Gemma 4 uses <|channel>/<channel|> as the generated thinking delimiters,
-    # regardless of what the client sends for thinking_start/end_token.
+    # Gemma 4 uses its own thinking delimiters regardless of what the client sends.
     if model.config.model_type == "gemma4":
-        thinking_start_token = "<|channel>"
-        thinking_end_token = "<channel|>"
+        thinking_start_token = GEMMA4_THINKING_START_TOKEN
+        thinking_end_token = GEMMA4_THINKING_END_TOKEN
 
     # Skip special tokens
     skip_special_tokens = kwargs.pop("skip_special_tokens", False)

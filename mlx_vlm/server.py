@@ -30,6 +30,8 @@ from .generate import (
     DEFAULT_TEMPERATURE,
     DEFAULT_THINKING_END_TOKEN,
     DEFAULT_THINKING_START_TOKEN,
+    GEMMA4_THINKING_END_TOKEN,
+    GEMMA4_THINKING_START_TOKEN,
     DEFAULT_TOP_P,
     generate,
     normalize_resize_shape,
@@ -43,6 +45,9 @@ from .vision_cache import VisionFeatureCache
 
 DEFAULT_SERVER_HOST = "0.0.0.0"
 DEFAULT_SERVER_PORT = 8080
+
+_THINK_START = GEMMA4_THINKING_START_TOKEN
+_THINK_END = GEMMA4_THINKING_END_TOKEN
 
 
 def get_prefill_step_size():
@@ -1134,10 +1139,8 @@ async def chat_completions_endpoint(request: ChatRequest):
 
                     output_text = ""
                     request_id = f"chatcmpl-{uuid.uuid4()}"
-                    _THINK_START = "<|channel>"
-                    _THINK_END = "<channel|>"
                     in_thinking = False
-                    thinking_buffer = ""
+                    thinking_buffer = []
                     for chunk in token_iterator:
                         if chunk is None or not hasattr(chunk, "text"):
                             print("Warning: Received unexpected chunk format:", chunk)
@@ -1162,7 +1165,7 @@ async def chat_completions_endpoint(request: ChatRequest):
                         if _THINK_START not in text and _THINK_END not in text:
                             # Fast path: no markers in this chunk
                             if in_thinking:
-                                thinking_buffer += text
+                                thinking_buffer.append(text)
                             else:
                                 delta_content = text
                         else:
@@ -1172,21 +1175,19 @@ async def chat_completions_endpoint(request: ChatRequest):
                                 if before:
                                     delta_content = before
                                 in_thinking = True
-                                thinking_buffer = after
+                                thinking_buffer = [after]
                             elif in_thinking:
-                                thinking_buffer += text
+                                thinking_buffer.append(text)
 
-                            if _THINK_END in thinking_buffer:
-                                think_part, remainder = thinking_buffer.split(
-                                    _THINK_END, 1
-                                )
+                            joined = "".join(thinking_buffer)
+                            if _THINK_END in joined:
+                                think_part, remainder = joined.split(_THINK_END, 1)
                                 delta_reasoning = think_part.lstrip("\n")
-                                thinking_buffer = ""
+                                thinking_buffer = []
                                 in_thinking = False
                                 if remainder:
                                     delta_content = remainder
 
-                        # Skip emitting empty chunks during thinking accumulation
                         if delta_content is None and delta_reasoning is None:
                             continue
 
@@ -1303,8 +1304,6 @@ async def chat_completions_endpoint(request: ChatRequest):
                     tool_calls["remaining_text"] = gen_result.text
 
                 _raw = tool_calls["remaining_text"]
-                _THINK_START = "<|channel>"
-                _THINK_END = "<channel|>"
                 if _THINK_START in _raw and _THINK_END in _raw:
                     _after = _raw.split(_THINK_START, 1)[1]
                     _thinking, _response = _after.split(_THINK_END, 1)
