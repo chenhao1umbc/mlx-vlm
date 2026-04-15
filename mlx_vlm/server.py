@@ -304,6 +304,9 @@ class ChatMessage(FlexibleBaseModel):
         ]
     ] = Field(None, description="Content of the message.")
     reasoning: Optional[str] = Field(None, description="Thinking/reasoning content.")
+    reasoning_content: Optional[str] = Field(
+        None, description="Alias for reasoning (openai-compatible clients)."
+    )
     tool_calls: List = []
 
 
@@ -1205,6 +1208,7 @@ async def chat_completions_endpoint(request: ChatRequest):
                                     role="assistant",
                                     content=delta_content,
                                     reasoning=delta_reasoning,
+                                    reasoning_content=delta_reasoning,
                                 )
                             )
                         ]
@@ -1328,6 +1332,7 @@ async def chat_completions_endpoint(request: ChatRequest):
                             role="assistant",
                             content=_content,
                             reasoning=_reasoning,
+                            reasoning_content=_reasoning,
                             tool_calls=tool_calls["calls"],
                         ),
                     )
