@@ -714,7 +714,7 @@ def stream_generate(
             gate_token, add_special_tokens=False
         )[-1]
         enable_thinking = enable_thinking and (
-            thinking_start_token_id in input_ids.flatten().tolist()
+            thinking_start_token_id in full_input_ids_list
         )
         tokenizer.thinking_budget_criteria = ThinkingBudgetCriteria(
             tokenizer=tokenizer,

@@ -1140,7 +1140,7 @@ async def chat_completions_endpoint(request: ChatRequest):
                     output_text = ""
                     request_id = f"chatcmpl-{uuid.uuid4()}"
                     in_thinking = False
-                    thinking_buffer = []
+                    first_reasoning_chunk = True
                     for chunk in token_iterator:
                         if chunk is None or not hasattr(chunk, "text"):
                             print("Warning: Received unexpected chunk format:", chunk)
@@ -1163,30 +1163,38 @@ async def chat_completions_endpoint(request: ChatRequest):
                         delta_reasoning = None
 
                         if _THINK_START not in text and _THINK_END not in text:
-                            # Fast path: no markers in this chunk
+                            # Fast path: no markers in this chunk — stream immediately
                             if in_thinking:
-                                thinking_buffer.append(text)
+                                delta_reasoning = text
                             else:
                                 delta_content = text
                         else:
-                            # Slow path: marker found — state transition
+                            # Slow path: marker in this chunk — state transition
                             if _THINK_START in text and not in_thinking:
                                 before, after = text.split(_THINK_START, 1)
                                 if before:
                                     delta_content = before
                                 in_thinking = True
-                                thinking_buffer = [after]
-                            elif in_thinking:
-                                thinking_buffer.append(text)
-
-                            joined = "".join(thinking_buffer)
-                            if _THINK_END in joined:
-                                think_part, remainder = joined.split(_THINK_END, 1)
-                                delta_reasoning = think_part.lstrip("\n")
-                                thinking_buffer = []
+                                first_reasoning_chunk = True
+                                if after:
+                                    delta_reasoning = after
+                            if _THINK_END in text and in_thinking:
+                                before, after = text.split(_THINK_END, 1)
+                                if before:
+                                    delta_reasoning = before
                                 in_thinking = False
-                                if remainder:
-                                    delta_content = remainder
+                                first_reasoning_chunk = True
+                                if after:
+                                    delta_content = after
+                            elif in_thinking and _THINK_START not in text:
+                                delta_reasoning = text
+
+                        if delta_reasoning is not None and first_reasoning_chunk:
+                            delta_reasoning = delta_reasoning.lstrip("\n")
+                            if delta_reasoning:
+                                first_reasoning_chunk = False
+                            else:
+                                delta_reasoning = None
 
                         if delta_content is None and delta_reasoning is None:
                             continue
