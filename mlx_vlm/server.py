@@ -1214,7 +1214,7 @@ async def chat_completions_endpoint(request: ChatRequest):
                                     usage=usage_stats,
                                     choices=choices,
                                 )
-                                yield f"data: {chunk_data.model_dump_json()}\n\n"
+                                yield f"data: {chunk_data.model_dump_json(exclude_none=True)}\n\n"
                             line_buffer = ""
                         elif in_thinking:
                             # Emit one SSE per complete line (terminated by \n)
@@ -1240,7 +1240,7 @@ async def chat_completions_endpoint(request: ChatRequest):
                                         usage=usage_stats,
                                         choices=choices,
                                     )
-                                    yield f"data: {chunk_data.model_dump_json()}\n\n"
+                                    yield f"data: {chunk_data.model_dump_json(exclude_none=True)}\n\n"
 
                         if delta_content is not None:
                             choices = [
@@ -1260,7 +1260,7 @@ async def chat_completions_endpoint(request: ChatRequest):
                                 usage=usage_stats,
                                 choices=choices,
                             )
-                            yield f"data: {chunk_data.model_dump_json()}\n\n"
+                            yield f"data: {chunk_data.model_dump_json(exclude_none=True)}\n\n"
 
                     # If generation ended mid-thinking (e.g. hit max_tokens),
                     # flush whatever partial line is buffered.
@@ -1282,7 +1282,7 @@ async def chat_completions_endpoint(request: ChatRequest):
                             usage=usage_stats,
                             choices=choices,
                         )
-                        yield f"data: {chunk_data.model_dump_json()}\n\n"
+                        yield f"data: {chunk_data.model_dump_json(exclude_none=True)}\n\n"
 
                     if tool_parser_type is not None:
                         tool_calls = process_tool_calls(
@@ -1313,7 +1313,7 @@ async def chat_completions_endpoint(request: ChatRequest):
                         usage=usage_stats,
                         choices=choices,
                     )
-                    yield f"data: {chunk_data.model_dump_json()}\n\n"
+                    yield f"data: {chunk_data.model_dump_json(exclude_none=True)}\n\n"
 
                     yield "data: [DONE]\n\n"
 
