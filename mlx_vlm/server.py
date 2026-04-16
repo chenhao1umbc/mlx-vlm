@@ -1143,7 +1143,7 @@ async def chat_completions_endpoint(request: ChatRequest):
                     output_text = ""
                     request_id = f"chatcmpl-{uuid.uuid4()}"
                     in_thinking = False
-                    reasoning_buffer = []
+                    line_buffer = ""
                     usage_stats = {}
                     for chunk in token_iterator:
                         if chunk is None or not hasattr(chunk, "text"):
@@ -1164,11 +1164,13 @@ async def chat_completions_endpoint(request: ChatRequest):
 
                         text = chunk.text
                         delta_content = None
+                        reasoning_fragment = ""
+                        thinking_just_ended = False
 
                         if _THINK_START not in text and _THINK_END not in text:
                             # Fast path: no markers in this chunk
                             if in_thinking:
-                                reasoning_buffer.append(text)
+                                reasoning_fragment = text
                             else:
                                 delta_content = text
                         else:
@@ -1178,26 +1180,56 @@ async def chat_completions_endpoint(request: ChatRequest):
                                 if before:
                                     delta_content = before
                                 in_thinking = True
-                                if after:
-                                    reasoning_buffer.append(after)
+                                reasoning_fragment = after
                             if _THINK_END in text and in_thinking:
                                 before, after = text.split(_THINK_END, 1)
-                                if before:
-                                    reasoning_buffer.append(before)
+                                reasoning_fragment = before
+                                thinking_just_ended = True
                                 in_thinking = False
-                                # Emit the complete thinking block as one SSE event
-                                # so clients (e.g. opencode) render one "Thinking:"
-                                # heading rather than one per token.
-                                full_reasoning = "".join(reasoning_buffer).lstrip("\n")
-                                reasoning_buffer = []
-                                if full_reasoning:
+                                if after:
+                                    delta_content = after
+                            elif in_thinking and _THINK_START not in text:
+                                reasoning_fragment = text
+
+                        if reasoning_fragment:
+                            line_buffer += reasoning_fragment
+
+                        if thinking_just_ended:
+                            # Flush remaining partial line when thinking block ends
+                            if line_buffer.strip():
+                                choices = [
+                                    ChatStreamChoice(
+                                        delta=ChatMessage(
+                                            role="assistant",
+                                            content=None,
+                                            reasoning=line_buffer,
+                                            reasoning_content=line_buffer,
+                                        )
+                                    )
+                                ]
+                                chunk_data = ChatStreamChunk(
+                                    id=request_id,
+                                    created=int(time.time()),
+                                    model=request.model,
+                                    usage=usage_stats,
+                                    choices=choices,
+                                )
+                                yield f"data: {chunk_data.model_dump_json()}\n\n"
+                            line_buffer = ""
+                        elif in_thinking:
+                            # Emit one SSE per complete line (terminated by \n)
+                            while "\n" in line_buffer:
+                                newline_pos = line_buffer.index("\n")
+                                line = line_buffer[: newline_pos + 1]
+                                line_buffer = line_buffer[newline_pos + 1 :]
+                                if line.strip():
                                     choices = [
                                         ChatStreamChoice(
                                             delta=ChatMessage(
                                                 role="assistant",
                                                 content=None,
-                                                reasoning=full_reasoning,
-                                                reasoning_content=full_reasoning,
+                                                reasoning=line,
+                                                reasoning_content=line,
                                             )
                                         )
                                     ]
@@ -1209,10 +1241,6 @@ async def chat_completions_endpoint(request: ChatRequest):
                                         choices=choices,
                                     )
                                     yield f"data: {chunk_data.model_dump_json()}\n\n"
-                                if after:
-                                    delta_content = after
-                            elif in_thinking and _THINK_START not in text:
-                                reasoning_buffer.append(text)
 
                         if delta_content is not None:
                             choices = [
@@ -1235,28 +1263,26 @@ async def chat_completions_endpoint(request: ChatRequest):
                             yield f"data: {chunk_data.model_dump_json()}\n\n"
 
                     # If generation ended mid-thinking (e.g. hit max_tokens),
-                    # flush whatever thinking was buffered.
-                    if reasoning_buffer and usage_stats:
-                        full_reasoning = "".join(reasoning_buffer).lstrip("\n")
-                        if full_reasoning:
-                            choices = [
-                                ChatStreamChoice(
-                                    delta=ChatMessage(
-                                        role="assistant",
-                                        content=None,
-                                        reasoning=full_reasoning,
-                                        reasoning_content=full_reasoning,
-                                    )
+                    # flush whatever partial line is buffered.
+                    if line_buffer.strip() and usage_stats:
+                        choices = [
+                            ChatStreamChoice(
+                                delta=ChatMessage(
+                                    role="assistant",
+                                    content=None,
+                                    reasoning=line_buffer,
+                                    reasoning_content=line_buffer,
                                 )
-                            ]
-                            chunk_data = ChatStreamChunk(
-                                id=request_id,
-                                created=int(time.time()),
-                                model=request.model,
-                                usage=usage_stats,
-                                choices=choices,
                             )
-                            yield f"data: {chunk_data.model_dump_json()}\n\n"
+                        ]
+                        chunk_data = ChatStreamChunk(
+                            id=request_id,
+                            created=int(time.time()),
+                            model=request.model,
+                            usage=usage_stats,
+                            choices=choices,
+                        )
+                        yield f"data: {chunk_data.model_dump_json()}\n\n"
 
                     if tool_parser_type is not None:
                         tool_calls = process_tool_calls(
