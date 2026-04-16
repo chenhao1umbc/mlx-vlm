@@ -1143,7 +1143,8 @@ async def chat_completions_endpoint(request: ChatRequest):
                     output_text = ""
                     request_id = f"chatcmpl-{uuid.uuid4()}"
                     in_thinking = False
-                    first_reasoning_chunk = True
+                    reasoning_buffer = []
+                    usage_stats = {}
                     for chunk in token_iterator:
                         if chunk is None or not hasattr(chunk, "text"):
                             print("Warning: Received unexpected chunk format:", chunk)
@@ -1163,12 +1164,11 @@ async def chat_completions_endpoint(request: ChatRequest):
 
                         text = chunk.text
                         delta_content = None
-                        delta_reasoning = None
 
                         if _THINK_START not in text and _THINK_END not in text:
-                            # Fast path: no markers in this chunk — stream immediately
+                            # Fast path: no markers in this chunk
                             if in_thinking:
-                                delta_reasoning = text
+                                reasoning_buffer.append(text)
                             else:
                                 delta_content = text
                         else:
@@ -1178,47 +1178,50 @@ async def chat_completions_endpoint(request: ChatRequest):
                                 if before:
                                     delta_content = before
                                 in_thinking = True
-                                first_reasoning_chunk = True
                                 if after:
-                                    delta_reasoning = after
+                                    reasoning_buffer.append(after)
                             if _THINK_END in text and in_thinking:
                                 before, after = text.split(_THINK_END, 1)
                                 if before:
-                                    delta_reasoning = before
+                                    reasoning_buffer.append(before)
                                 in_thinking = False
-                                first_reasoning_chunk = True
+                                # Emit the complete thinking block as one SSE event
+                                # so clients (e.g. opencode) render one "Thinking:"
+                                # heading rather than one per token.
+                                full_reasoning = "".join(reasoning_buffer).lstrip("\n")
+                                reasoning_buffer = []
+                                if full_reasoning:
+                                    choices = [
+                                        ChatStreamChoice(
+                                            delta=ChatMessage(
+                                                role="assistant",
+                                                content=None,
+                                                reasoning=full_reasoning,
+                                                reasoning_content=full_reasoning,
+                                            )
+                                        )
+                                    ]
+                                    chunk_data = ChatStreamChunk(
+                                        id=request_id,
+                                        created=int(time.time()),
+                                        model=request.model,
+                                        usage=usage_stats,
+                                        choices=choices,
+                                    )
+                                    yield f"data: {chunk_data.model_dump_json()}\n\n"
                                 if after:
                                     delta_content = after
                             elif in_thinking and _THINK_START not in text:
-                                delta_reasoning = text
+                                reasoning_buffer.append(text)
 
-                        if delta_reasoning is not None and first_reasoning_chunk:
-                            delta_reasoning = delta_reasoning.lstrip("\n")
-                            if delta_reasoning:
-                                first_reasoning_chunk = False
-                            else:
-                                delta_reasoning = None
-
-                        if delta_content is None and delta_reasoning is None:
-                            continue
-
-                        # Split reasoning at newline boundaries: chunks like
-                        # "thought\nThe" cause opencode to drop the "Thinking:"
-                        # prefix for text after the newline. Emit one SSE event
-                        # per newline-delimited segment to prevent this.
-                        r_parts = (
-                            [p for p in re.split(r"(?<=\n)", delta_reasoning) if p]
-                            if delta_reasoning is not None
-                            else []
-                        )
-                        for r_part in r_parts:
+                        if delta_content is not None:
                             choices = [
                                 ChatStreamChoice(
                                     delta=ChatMessage(
                                         role="assistant",
-                                        content=None,
-                                        reasoning=r_part,
-                                        reasoning_content=r_part,
+                                        content=delta_content,
+                                        reasoning=None,
+                                        reasoning_content=None,
                                     )
                                 )
                             ]
@@ -1231,14 +1234,18 @@ async def chat_completions_endpoint(request: ChatRequest):
                             )
                             yield f"data: {chunk_data.model_dump_json()}\n\n"
 
-                        if delta_content is not None:
+                    # If generation ended mid-thinking (e.g. hit max_tokens),
+                    # flush whatever thinking was buffered.
+                    if reasoning_buffer and usage_stats:
+                        full_reasoning = "".join(reasoning_buffer).lstrip("\n")
+                        if full_reasoning:
                             choices = [
                                 ChatStreamChoice(
                                     delta=ChatMessage(
                                         role="assistant",
-                                        content=delta_content,
-                                        reasoning=None,
-                                        reasoning_content=None,
+                                        content=None,
+                                        reasoning=full_reasoning,
+                                        reasoning_content=full_reasoning,
                                     )
                                 )
                             ]
