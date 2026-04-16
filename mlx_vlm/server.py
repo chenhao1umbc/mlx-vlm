@@ -1202,25 +1202,54 @@ async def chat_completions_endpoint(request: ChatRequest):
                         if delta_content is None and delta_reasoning is None:
                             continue
 
-                        choices = [
-                            ChatStreamChoice(
-                                delta=ChatMessage(
-                                    role="assistant",
-                                    content=delta_content,
-                                    reasoning=delta_reasoning,
-                                    reasoning_content=delta_reasoning,
-                                )
-                            )
-                        ]
-                        chunk_data = ChatStreamChunk(
-                            id=request_id,
-                            created=int(time.time()),
-                            model=request.model,
-                            usage=usage_stats,
-                            choices=choices,
+                        # Split reasoning at newline boundaries: chunks like
+                        # "thought\nThe" cause opencode to drop the "Thinking:"
+                        # prefix for text after the newline. Emit one SSE event
+                        # per newline-delimited segment to prevent this.
+                        r_parts = (
+                            [p for p in re.split(r"(?<=\n)", delta_reasoning) if p]
+                            if delta_reasoning is not None
+                            else []
                         )
+                        for r_part in r_parts:
+                            choices = [
+                                ChatStreamChoice(
+                                    delta=ChatMessage(
+                                        role="assistant",
+                                        content=None,
+                                        reasoning=r_part,
+                                        reasoning_content=r_part,
+                                    )
+                                )
+                            ]
+                            chunk_data = ChatStreamChunk(
+                                id=request_id,
+                                created=int(time.time()),
+                                model=request.model,
+                                usage=usage_stats,
+                                choices=choices,
+                            )
+                            yield f"data: {chunk_data.model_dump_json()}\n\n"
 
-                        yield f"data: {chunk_data.model_dump_json()}\n\n"
+                        if delta_content is not None:
+                            choices = [
+                                ChatStreamChoice(
+                                    delta=ChatMessage(
+                                        role="assistant",
+                                        content=delta_content,
+                                        reasoning=None,
+                                        reasoning_content=None,
+                                    )
+                                )
+                            ]
+                            chunk_data = ChatStreamChunk(
+                                id=request_id,
+                                created=int(time.time()),
+                                model=request.model,
+                                usage=usage_stats,
+                                choices=choices,
+                            )
+                            yield f"data: {chunk_data.model_dump_json()}\n\n"
 
                     if tool_parser_type is not None:
                         tool_calls = process_tool_calls(
