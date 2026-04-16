@@ -48,6 +48,8 @@ DEFAULT_SERVER_PORT = 8080
 
 _THINK_START = GEMMA4_THINKING_START_TOKEN
 _THINK_END = GEMMA4_THINKING_END_TOKEN
+_TOOL_CALL_START = "<|tool_call>"
+_TOOL_CALL_END = "<tool_call|>"
 
 
 def get_prefill_step_size():
@@ -1143,6 +1145,7 @@ async def chat_completions_endpoint(request: ChatRequest):
                     output_text = ""
                     request_id = f"chatcmpl-{uuid.uuid4()}"
                     in_thinking = False
+                    in_tool_call = False
                     line_buffer = ""
                     usage_stats = {}
                     for chunk in token_iterator:
@@ -1167,29 +1170,60 @@ async def chat_completions_endpoint(request: ChatRequest):
                         reasoning_fragment = ""
                         thinking_just_ended = False
 
-                        if _THINK_START not in text and _THINK_END not in text:
+                        has_think_marker = _THINK_START in text or _THINK_END in text
+                        has_tool_marker = (
+                            _TOOL_CALL_START in text or _TOOL_CALL_END in text
+                        )
+
+                        if not has_think_marker and not has_tool_marker:
                             # Fast path: no markers in this chunk
                             if in_thinking:
                                 reasoning_fragment = text
-                            else:
+                            elif not in_tool_call:
                                 delta_content = text
+                            # in_tool_call=True → silently drop; output_text retains for post-gen parsing
                         else:
-                            # Slow path: marker in this chunk — state transition
-                            if _THINK_START in text and not in_thinking:
+                            # Slow path: state transitions for thinking and tool-call markers.
+                            # Use elif chains so blocks are mutually exclusive — setting a flag
+                            # in one branch must not accidentally trigger a later branch.
+                            if (
+                                _THINK_START in text
+                                and not in_thinking
+                                and not in_tool_call
+                            ):
                                 before, after = text.split(_THINK_START, 1)
                                 if before:
                                     delta_content = before
                                 in_thinking = True
                                 reasoning_fragment = after
-                            if _THINK_END in text and in_thinking:
+                            elif _THINK_END in text and in_thinking:
                                 before, after = text.split(_THINK_END, 1)
                                 reasoning_fragment = before
                                 thinking_just_ended = True
                                 in_thinking = False
+                                # after may immediately contain a tool-call start
                                 if after:
-                                    delta_content = after
-                            elif in_thinking and _THINK_START not in text:
+                                    if _TOOL_CALL_START in after:
+                                        pre_tool, _ = after.split(_TOOL_CALL_START, 1)
+                                        if pre_tool:
+                                            delta_content = pre_tool
+                                        in_tool_call = True
+                                    else:
+                                        delta_content = after
+                            elif in_thinking:
+                                # Mid-thinking chunk with no markers
                                 reasoning_fragment = text
+                            elif _TOOL_CALL_START in text and not in_tool_call:
+                                before, _ = text.split(_TOOL_CALL_START, 1)
+                                if before:
+                                    delta_content = before
+                                in_tool_call = True
+
+                            if _TOOL_CALL_END in text and in_tool_call:
+                                _, after = text.split(_TOOL_CALL_END, 1)
+                                in_tool_call = False
+                                if after and not in_thinking:
+                                    delta_content = (delta_content or "") + after
 
                         if reasoning_fragment:
                             line_buffer += reasoning_fragment
