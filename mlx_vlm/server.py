@@ -1229,7 +1229,7 @@ async def chat_completions_endpoint(request: ChatRequest):
                             line_buffer += reasoning_fragment
 
                         if thinking_just_ended:
-                            # Flush remaining partial line when thinking block ends
+                            # Emit the full thinking block as one SSE event
                             if line_buffer.strip():
                                 choices = [
                                     ChatStreamChoice(
@@ -1250,31 +1250,6 @@ async def chat_completions_endpoint(request: ChatRequest):
                                 )
                                 yield f"data: {chunk_data.model_dump_json(exclude_none=True)}\n\n"
                             line_buffer = ""
-                        elif in_thinking:
-                            # Emit one SSE per complete line (terminated by \n)
-                            while "\n" in line_buffer:
-                                newline_pos = line_buffer.index("\n")
-                                line = line_buffer[: newline_pos + 1]
-                                line_buffer = line_buffer[newline_pos + 1 :]
-                                if line.strip():
-                                    choices = [
-                                        ChatStreamChoice(
-                                            delta=ChatMessage(
-                                                role="assistant",
-                                                content=None,
-                                                reasoning=line,
-                                                reasoning_content=line,
-                                            )
-                                        )
-                                    ]
-                                    chunk_data = ChatStreamChunk(
-                                        id=request_id,
-                                        created=int(time.time()),
-                                        model=request.model,
-                                        usage=usage_stats,
-                                        choices=choices,
-                                    )
-                                    yield f"data: {chunk_data.model_dump_json(exclude_none=True)}\n\n"
 
                         if delta_content is not None:
                             choices = [
