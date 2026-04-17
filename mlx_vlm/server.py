@@ -1244,7 +1244,16 @@ async def chat_completions_endpoint(request: ChatRequest):
                                 _, after = text.split(_TOOL_CALL_END, 1)
                                 in_tool_call = False
                                 if after and not in_thinking:
-                                    delta_content = (delta_content or "") + after
+                                    # Another tool call may immediately follow
+                                    if _TOOL_CALL_START in after:
+                                        pre_tool, _ = after.split(_TOOL_CALL_START, 1)
+                                        if pre_tool:
+                                            delta_content = (
+                                                delta_content or ""
+                                            ) + pre_tool
+                                        in_tool_call = True
+                                    else:
+                                        delta_content = (delta_content or "") + after
 
                         if reasoning_fragment:
                             line_buffer += reasoning_fragment
