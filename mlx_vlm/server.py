@@ -1195,7 +1195,28 @@ async def chat_completions_endpoint(request: ChatRequest):
                                 if before:
                                     delta_content = before
                                 in_thinking = True
-                                reasoning_fragment = after
+                                # Same chunk may contain THINK_END (short retry thinking blocks)
+                                if _THINK_END in after:
+                                    inner, remainder = after.split(_THINK_END, 1)
+                                    reasoning_fragment = inner
+                                    thinking_just_ended = True
+                                    in_thinking = False
+                                    if remainder:
+                                        if _TOOL_CALL_START in remainder:
+                                            pre_tool, _ = remainder.split(
+                                                _TOOL_CALL_START, 1
+                                            )
+                                            if pre_tool:
+                                                delta_content = (
+                                                    delta_content or ""
+                                                ) + pre_tool
+                                            in_tool_call = True
+                                        else:
+                                            delta_content = (
+                                                delta_content or ""
+                                            ) + remainder
+                                else:
+                                    reasoning_fragment = after
                             elif _THINK_END in text and in_thinking:
                                 before, after = text.split(_THINK_END, 1)
                                 reasoning_fragment = before
